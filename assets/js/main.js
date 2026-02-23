@@ -256,3 +256,161 @@
 		}
 
 })(jQuery);
+
+// Resume modal interactions (PDF.js viewer)
+(function() {
+	// PDF.js worker
+	if (window.pdfjsLib) {
+		window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+	}
+
+	var pdfDoc = null;
+	var pageNum = 1;
+	var pageCount = 0;
+	// baseScale is computed to fit the page to the modal container;
+	// zoom is a user-controlled multiplier applied on top of baseScale.
+	var baseScale = 1;
+	var zoom = 1.1; // slightly larger by default so text fits better
+	var zoomStep = 0.25;
+	var minZoom = 0.5;
+	var maxZoom = 4; // allow larger zoom when needed
+
+	var canvas = null;
+	var ctx = null;
+
+	function renderPage(num) {
+		if (!pdfDoc) return;
+		pdfDoc.getPage(num).then(function(page) {
+			// Compute a base scale so the page fits inside the modal container
+			var unscaledViewport = page.getViewport({ scale: 1 });
+			var container = document.querySelector('.resume-frame-wrapper');
+			var containerWidth = container ? container.clientWidth - 20 : unscaledViewport.width; // padding
+			var containerHeight = container ? container.clientHeight - 20 : unscaledViewport.height;
+
+			var fitScaleW = containerWidth / unscaledViewport.width;
+			var fitScaleH = containerHeight / unscaledViewport.height;
+			baseScale = Math.min(fitScaleW, fitScaleH, 3);
+			if (baseScale <= 0) baseScale = 1;
+
+			var desiredScale = baseScale * zoom;
+
+			var viewport = page.getViewport({ scale: desiredScale });
+
+			// Handle high-DPI displays
+			var outputScale = window.devicePixelRatio || 1;
+
+			canvas.style.width = Math.floor(viewport.width) + 'px';
+			canvas.style.height = Math.floor(viewport.height) + 'px';
+			canvas.width = Math.floor(viewport.width * outputScale);
+			canvas.height = Math.floor(viewport.height * outputScale);
+
+			ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+			var renderContext = {
+				canvasContext: ctx,
+				viewport: page.getViewport({ scale: desiredScale })
+			};
+
+			page.render(renderContext).promise.then(function() {
+				document.getElementById('pageNum').textContent = pageNum;
+			});
+		}).catch(function(err) {
+			console.error('Error rendering page:', err);
+		});
+	}
+
+	function queueRenderPage(num) {
+		if (num < 1) num = 1;
+		if (num > pageCount) num = pageCount;
+		pageNum = num;
+		renderPage(pageNum);
+	}
+
+	function loadDocument(url) {
+		if (!window.pdfjsLib) {
+			console.error('pdfjsLib not found');
+			return;
+		}
+		var loadingTask = window.pdfjsLib.getDocument(url);
+		loadingTask.promise.then(function(pdf) {
+			pdfDoc = pdf;
+			pageCount = pdf.numPages;
+			document.getElementById('pageCount').textContent = pageCount;
+			pageNum = 1;
+			renderPage(pageNum);
+		}).catch(function(err) {
+			console.error('Error loading PDF:', err);
+		});
+	}
+
+	function openModal() {
+		var modal = document.getElementById('resumeModal');
+		if (!modal) return;
+		modal.setAttribute('aria-hidden', 'false');
+		// ensure canvas/context ready
+		if (!canvas) {
+			canvas = document.getElementById('resumeCanvas');
+			if (canvas) ctx = canvas.getContext('2d');
+		}
+		// keep wrapper scroll position — center alignment preferred
+		// load PDF if not loaded
+		if (!pdfDoc) {
+			loadDocument('assets/docs/resume.pdf');
+		} else {
+			renderPage(pageNum);
+		}
+	}
+
+	function closeModal() {
+		var modal = document.getElementById('resumeModal');
+		if (!modal) return;
+		modal.setAttribute('aria-hidden', 'true');
+	}
+
+	document.addEventListener('DOMContentLoaded', function() {
+		var toggle = document.getElementById('resumeToggle');
+		if (toggle) toggle.addEventListener('click', function(e) { e.preventDefault(); openModal(); });
+
+		var closeBtn = document.getElementById('resumeClose');
+		if (closeBtn) closeBtn.addEventListener('click', function() { closeModal(); });
+
+		var prevBtn = document.getElementById('prevPage');
+		var nextBtn = document.getElementById('nextPage');
+		var zoomIn = document.getElementById('zoomIn');
+		var zoomOut = document.getElementById('zoomOut');
+		var zoomReset = document.getElementById('zoomReset');
+
+		if (prevBtn) prevBtn.addEventListener('click', function() {
+			if (pageNum <= 1) return;
+			pageNum--;
+			queueRenderPage(pageNum);
+		});
+
+		if (nextBtn) nextBtn.addEventListener('click', function() {
+			if (pageNum >= pageCount) return;
+			pageNum++;
+			queueRenderPage(pageNum);
+		});
+
+		if (zoomIn) zoomIn.addEventListener('click', function() {
+			zoom = Math.min(maxZoom, zoom + zoomStep);
+			renderPage(pageNum);
+		});
+		if (zoomOut) zoomOut.addEventListener('click', function() {
+			zoom = Math.max(minZoom, zoom - zoomStep);
+			renderPage(pageNum);
+		});
+		if (zoomReset) zoomReset.addEventListener('click', function() {
+			zoom = 1;
+			renderPage(pageNum);
+		});
+
+		// Close when clicking backdrop
+		var backdrop = document.querySelector('.resume-modal-backdrop');
+		if (backdrop) backdrop.addEventListener('click', closeModal);
+
+		// Ensure download link points to the PDF path
+		var dl = document.getElementById('resumeDownload');
+		if (dl) dl.setAttribute('href', 'assets/docs/resume.pdf');
+	});
+})();
